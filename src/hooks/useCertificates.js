@@ -15,12 +15,15 @@ export function useCertificates() {
     try {
       let certs = storage.getCertifications();
       let prof = storage.getProfile();
+      let storedVersion = storage.getVersion();
+      const defaultData = getDefaultData();
+      const currentVersion = defaultData.version || 1;
 
-      // If no data, load defaults
-      if (!certs || certs.length === 0) {
-        const defaultData = getDefaultData();
+      // If no data, or if version in bundle is newer than stored version
+      if (!certs || certs.length === 0 || storedVersion < currentVersion) {
         storage.setCertifications(defaultData.certifications);
         storage.setProfile(defaultData.profile);
+        storage.setVersion(currentVersion);
         certs = defaultData.certifications;
         prof = defaultData.profile;
       }

@@ -21,6 +21,7 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
   const [activeTab, setActiveTab] = useState('certifications');
   const [profileData, setProfileData] = useState(profile || {});
   const [showImport, setShowImport] = useState(false);
+  const [version, setVersionState] = useState(1);
   const fileInputRef = useRef(null);
   const certImageInputRef = useRef(null);
   const importFileInputRef = useRef(null);
@@ -59,13 +60,18 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
       storage.setCertifications(defaultData.certifications);
       setCertifications(defaultData.certifications);
     }
+    setVersionState(storage.getVersion() || 1);
   };
 
   const saveData = (data) => {
+    const currentVersion = storage.getVersion() || 1;
+    const newVersion = currentVersion + 1;
+    storage.setVersion(newVersion);
+    setVersionState(newVersion);
     storage.setCertifications(data);
     setCertifications(data);
     if (onUpdate) onUpdate(data);
-    toast.success('Data saved successfully!');
+    toast.success(`Data saved successfully! (Version bumped to ${newVersion})`);
   };
 
   const handleLogin = (e) => {
@@ -181,10 +187,14 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
   };
 
   const saveProfile = () => {
+    const currentVersion = storage.getVersion() || 1;
+    const newVersion = currentVersion + 1;
+    storage.setVersion(newVersion);
+    setVersionState(newVersion);
     if (onProfileUpdate) {
       onProfileUpdate(profileData);
     }
-    toast.success('Profile updated successfully!');
+    toast.success(`Profile updated successfully! (Version bumped to ${newVersion})`);
   };
 
   const handleExport = () => {
@@ -209,6 +219,7 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
         const data = JSON.parse(event.target.result);
         storage.importData(data);
         loadData();
+        setVersionState(storage.getVersion() || 1);
         if (data.profile) {
           setProfileData(data.profile);
           if (onProfileUpdate) onProfileUpdate(data.profile);
@@ -322,7 +333,7 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
             Import Data
           </button>
           <span className="text-[10px] text-slate-500">
-            {certifications.length} items • Storage: localStorage
+            {certifications.length} items • Version: {version} • Storage: localStorage
           </span>
         </div>
 
