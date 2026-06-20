@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://certifications.funclexa.dev/sitemap.xml
