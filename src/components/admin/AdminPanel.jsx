@@ -19,9 +19,17 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
   const [certifications, setCertifications] = useState([]);
   const [editingItem, setEditingItem] = useState(null);
   const [activeTab, setActiveTab] = useState('certifications');
-  const [profileData, setProfileData] = useState(profile || {});
+  const [profileData, setProfileData] = useState(() => {
+    if (profile) {
+      const { photo, ...rest } = profile;
+      return rest;
+    }
+    return {};
+  });
+  const [profilePhoto, setProfilePhoto] = useState(profile?.photo || '');
   const [showImport, setShowImport] = useState(false);
   const [version, setVersionState] = useState(1);
+  const [certImage, setCertImage] = useState('');
   const fileInputRef = useRef(null);
   const certImageInputRef = useRef(null);
   const importFileInputRef = useRef(null);
@@ -34,7 +42,6 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
     credentialId: '',
     type: 'certification',
     image: '',
-    certificateImage: '',
     description: '',
     skills: [],
     category: '',
@@ -47,7 +54,11 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
   useEffect(() => {
     if (isAuthenticated) {
       loadData();
-      if (profile) setProfileData(profile);
+      if (profile) {
+        const { photo, ...rest } = profile;
+        setProfileData(rest);
+        setProfilePhoto(photo || '');
+      }
     }
   }, [isAuthenticated, profile]);
 
@@ -95,7 +106,6 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
       credentialId: '',
       type: 'certification',
       image: '',
-      certificateImage: '',
       description: '',
       skills: [],
       category: '',
@@ -103,11 +113,14 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
       downloadUrl: '',
       badgeColor: 'from-primary-500 to-secondary-500',
     });
+    setCertImage('');
   };
 
   const handleEdit = (item) => {
     setEditingItem(item.id);
-    setFormData(item);
+    const { certificateImage, ...rest } = item;
+    setFormData(rest);
+    setCertImage(certificateImage || '');
   };
 
   const handleSave = () => {
@@ -116,18 +129,20 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
       return;
     }
 
+    const finalCert = { ...formData, certificateImage: certImage };
     let updatedData;
     if (editingItem) {
       updatedData = certifications.map(c => 
-        c.id === editingItem ? { ...formData } : c
+        c.id === editingItem ? finalCert : c
       );
     } else {
-      const newCert = { ...formData, id: Date.now().toString() };
+      const newCert = { ...finalCert, id: Date.now().toString() };
       updatedData = [...certifications, newCert];
     }
     
     saveData(updatedData);
     setEditingItem(null);
+    setCertImage('');
     toast.success(editingItem ? 'Certification updated!' : 'Certification added!');
   };
 
@@ -161,10 +176,14 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
     if (file) {
       const reader = new FileReader();
       reader.onloadend = () => {
-        setFormData({
-          ...formData,
-          [field]: reader.result,
-        });
+        if (field === 'certificateImage') {
+          setCertImage(reader.result);
+        } else {
+          setFormData(prev => ({
+            ...prev,
+            [field]: reader.result,
+          }));
+        }
         toast.success('Image uploaded successfully!');
       };
       reader.readAsDataURL(file);
@@ -176,10 +195,7 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
     if (file) {
       const reader = new FileReader();
       reader.onloadend = () => {
-        setProfileData({
-          ...profileData,
-          photo: reader.result,
-        });
+        setProfilePhoto(reader.result);
         toast.success('Profile photo updated!');
       };
       reader.readAsDataURL(file);
@@ -191,8 +207,9 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
     const newVersion = currentVersion + 1;
     storage.setVersion(newVersion);
     setVersionState(newVersion);
+    const finalProfile = { ...profileData, photo: profilePhoto };
     if (onProfileUpdate) {
-      onProfileUpdate(profileData);
+      onProfileUpdate(finalProfile);
     }
     toast.success(`Profile updated successfully! (Version bumped to ${newVersion})`);
   };
@@ -221,7 +238,9 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
         loadData();
         setVersionState(storage.getVersion() || 1);
         if (data.profile) {
-          setProfileData(data.profile);
+          const { photo, ...rest } = data.profile;
+          setProfileData(rest);
+          setProfilePhoto(photo || '');
           if (onProfileUpdate) onProfileUpdate(data.profile);
         }
         toast.success('Data imported successfully!');
@@ -395,8 +414,8 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
                 <label className="text-sm text-slate-400 mb-2 block">Profile Photo</label>
                 <div className="flex items-center gap-4">
                   <div className="w-24 h-24 rounded-2xl bg-white/5 border-2 border-dashed border-white/10 flex items-center justify-center overflow-hidden">
-                    {profileData.photo ? (
-                      <img src={profileData.photo} alt="Profile" className="w-full h-full object-cover" />
+                    {profilePhoto ? (
+                      <img src={profilePhoto} alt="Profile" className="w-full h-full object-cover" />
                     ) : (
                       <Camera className="w-8 h-8 text-slate-500" />
                     )}
@@ -587,8 +606,8 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
                     <label className="text-sm text-slate-400 mb-2 block">Certificate Image</label>
                     <div className="flex items-center gap-4">
                       <div className="w-40 h-28 rounded-xl bg-white/5 border-2 border-dashed border-white/10 flex items-center justify-center overflow-hidden">
-                        {formData.certificateImage ? (
-                          <img src={formData.certificateImage} alt="Certificate" className="w-full h-full object-cover" />
+                        {certImage ? (
+                          <img src={certImage} alt="Certificate" className="w-full h-full object-cover" />
                         ) : (
                           <div className="text-center">
                             <Image className="w-8 h-8 text-slate-500 mx-auto" />
