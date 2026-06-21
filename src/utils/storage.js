@@ -51,12 +51,14 @@ export const storage = {
   },
 
   // Export data as JSON (for backup)
+  // NOTE: Output format MUST match certifications.json exactly: { version, certifications, profile }
+  // Do NOT add extra fields like exportedAt — the exported file is meant to be
+  // directly pasteable into src/data/certifications.json for deployment.
   exportData: () => {
     return {
       version: storage.getVersion() || 1,
-      certifications: storage.getCertifications(),
-      profile: storage.getProfile(),
-      exportedAt: new Date().toISOString(),
+      certifications: storage.getCertifications() || [],
+      profile: storage.getProfile() || {},
     };
   },
 

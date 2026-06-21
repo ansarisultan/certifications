@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { 
   X, Upload, Plus, Trash2, Edit, Save, 
   Shield, Key, Lock, Unlock, Eye, EyeOff,
@@ -11,6 +11,79 @@ import { storage, getDefaultData } from '../../utils/storage';
 import toast from 'react-hot-toast';
 
 const ADMIN_KEY = 'sultan_admin_2024';
+
+const compressImage = (file, maxWidth = 800, maxWeightKB = 80) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxWidth) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+
+        // Compress to JPEG with quality scaling
+        let quality = 0.8;
+        let dataUrl = canvas.toDataURL('image/jpeg', quality);
+        
+        while (dataUrl.length > maxWeightKB * 1333 && quality > 0.3) {
+          quality -= 0.1;
+          dataUrl = canvas.toDataURL('image/jpeg', quality);
+        }
+        
+        resolve(dataUrl);
+      };
+      img.onerror = reject;
+      img.src = event.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+};
+
+const uploadImageToServer = async (file) => {
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    try {
+      // Read file as base64
+      const base64Data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      const response = await fetch('/api/upload-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileName: file.name,
+          fileData: base64Data
+        })
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        if (result.success) {
+          return result.url; // e.g. /uploads/image_name.png
+        }
+      }
+    } catch (e) {
+      console.error('Failed to upload image to local dev server:', e);
+    }
+  }
+  return null;
+};
 
 export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfileUpdate }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -28,6 +101,7 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
   });
   const [profilePhoto, setProfilePhoto] = useState(profile?.photo || '');
   const [showImport, setShowImport] = useState(false);
+  const [showForm, setShowForm] = useState(false);
   const [version, setVersionState] = useState(1);
   const [certImage, setCertImage] = useState('');
   const fileInputRef = useRef(null);
@@ -74,14 +148,23 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
     setVersionState(storage.getVersion() || 1);
   };
 
-  const saveData = (data) => {
-    const currentVersion = storage.getVersion() || 1;
-    const newVersion = currentVersion + 1;
-    storage.setVersion(newVersion);
-    setVersionState(newVersion);
+  const saveData = async (data) => {
+    let newVersion = (storage.getVersion() || 1) + 1;
     storage.setCertifications(data);
     setCertifications(data);
-    if (onUpdate) onUpdate(data);
+    
+    if (onUpdate) {
+      const serverVersion = await onUpdate(data);
+      if (serverVersion) {
+        newVersion = serverVersion;
+      } else {
+        storage.setVersion(newVersion);
+      }
+    } else {
+      storage.setVersion(newVersion);
+    }
+    
+    setVersionState(newVersion);
     toast.success(`Data saved successfully! (Version bumped to ${newVersion})`);
   };
 
@@ -114,16 +197,18 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
       badgeColor: 'from-primary-500 to-secondary-500',
     });
     setCertImage('');
+    setShowForm(true);
   };
 
-  const handleEdit = (item) => {
+  const handleEdit = useCallback((item) => {
     setEditingItem(item.id);
     const { certificateImage, ...rest } = item;
     setFormData(rest);
     setCertImage(certificateImage || '');
-  };
+    setShowForm(true);
+  }, []);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!formData.title || !formData.issuer) {
       toast.error('Title and Issuer are required');
       return;
@@ -140,19 +225,20 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
       updatedData = [...certifications, newCert];
     }
     
-    saveData(updatedData);
+    await saveData(updatedData);
     setEditingItem(null);
     setCertImage('');
+    setShowForm(false);
     toast.success(editingItem ? 'Certification updated!' : 'Certification added!');
   };
 
-  const handleDelete = (id) => {
+  const handleDelete = useCallback(async (id) => {
     if (window.confirm('Are you sure you want to delete this certification?')) {
       const updatedData = certifications.filter(c => c.id !== id);
-      saveData(updatedData);
+      await saveData(updatedData);
       toast.success('Deleted successfully!');
     }
-  };
+  }, [certifications]);
 
   const handleAddSkill = () => {
     if (newSkill.trim() && !formData.skills.includes(newSkill.trim())) {
@@ -171,46 +257,66 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
     });
   };
 
-  const handleImageUpload = (e, field) => {
+  const handleImageUpload = async (e, field) => {
     const file = e.target.files[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
+      const toastId = toast.loading('Uploading and processing image...');
+      try {
+        let imageUrl = await uploadImageToServer(file);
+        if (!imageUrl) {
+          imageUrl = await compressImage(file);
+        }
+
         if (field === 'certificateImage') {
-          setCertImage(reader.result);
+          setCertImage(imageUrl);
         } else {
           setFormData(prev => ({
             ...prev,
-            [field]: reader.result,
+            [field]: imageUrl,
           }));
         }
-        toast.success('Image uploaded successfully!');
-      };
-      reader.readAsDataURL(file);
+        toast.success('Image processed successfully!', { id: toastId });
+      } catch (err) {
+        console.error(err);
+        toast.error('Failed to process image', { id: toastId });
+      }
     }
   };
 
-  const handleProfileImageUpload = (e) => {
+  const handleProfileImageUpload = async (e) => {
     const file = e.target.files[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setProfilePhoto(reader.result);
-        toast.success('Profile photo updated!');
-      };
-      reader.readAsDataURL(file);
+      const toastId = toast.loading('Uploading and processing profile image...');
+      try {
+        let imageUrl = await uploadImageToServer(file);
+        if (!imageUrl) {
+          imageUrl = await compressImage(file);
+        }
+        setProfilePhoto(imageUrl);
+        toast.success('Profile photo updated!', { id: toastId });
+      } catch (err) {
+        console.error(err);
+        toast.error('Failed to process profile photo', { id: toastId });
+      }
     }
   };
 
-  const saveProfile = () => {
-    const currentVersion = storage.getVersion() || 1;
-    const newVersion = currentVersion + 1;
-    storage.setVersion(newVersion);
-    setVersionState(newVersion);
+  const saveProfile = async () => {
     const finalProfile = { ...profileData, photo: profilePhoto };
+    let newVersion = (storage.getVersion() || 1) + 1;
+    
     if (onProfileUpdate) {
-      onProfileUpdate(finalProfile);
+      const serverVersion = await onProfileUpdate(finalProfile);
+      if (serverVersion) {
+        newVersion = serverVersion;
+      } else {
+        storage.setVersion(newVersion);
+      }
+    } else {
+      storage.setVersion(newVersion);
     }
+    
+    setVersionState(newVersion);
     toast.success(`Profile updated successfully! (Version bumped to ${newVersion})`);
   };
 
@@ -252,6 +358,73 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
     reader.readAsText(file);
     e.target.value = '';
   };
+
+  // Performance optimizations: memoized stats and certification list to prevent lagginess on typing
+  const stats = useMemo(() => {
+    const total = certifications.length;
+    const certsCount = certifications.filter(c => c.type === 'certification').length;
+    const badgesCount = certifications.filter(c => c.type === 'badge').length;
+    const totalSkills = certifications.reduce((acc, c) => acc + (c.skills?.length || 0), 0);
+    return { total, certsCount, badgesCount, totalSkills };
+  }, [certifications]);
+
+  const memoizedList = useMemo(() => {
+    return (
+      <div className="space-y-3">
+        {certifications.map((item) => (
+          <div
+            key={item.id}
+            className="panel-3d p-4 flex items-center justify-between hover:border-primary-500/30 transition animate-fade-in"
+          >
+            <div className="flex items-center gap-4 flex-1 min-w-0">
+              <div className={`w-12 h-12 rounded-xl bg-gradient-to-r ${item.badgeColor || 'from-primary-500 to-secondary-500'} flex items-center justify-center flex-shrink-0`}>
+                {item.image ? (
+                  <img src={item.image} alt={item.title} className="w-6 h-6" />
+                ) : (
+                  <span className="text-white font-bold text-sm">
+                    {item.type === 'certification' ? 'C' : 'B'}
+                  </span>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h4 className="text-white font-semibold truncate">{item.title}</h4>
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full ${
+                    item.type === 'certification'
+                      ? 'bg-primary-500/20 text-primary-400 border border-primary-500/20'
+                      : 'bg-warm-500/20 text-warm-400 border border-warm-500/20'
+                  }`}>
+                    {item.type}
+                  </span>
+                  {item.certificateImage && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-success-500/20 text-success-400 border border-success-500/20">
+                      <Image className="w-3 h-3 inline mr-1" />
+                      Has Image
+                    </span>
+                  )}
+                </div>
+                <p className="text-sm text-slate-400 truncate">{item.issuer} • {item.date}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => handleEdit(item)}
+                className="p-2 rounded-lg hover:bg-white/5 transition text-slate-400 hover:text-white"
+              >
+                <Edit className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => handleDelete(item.id)}
+                className="p-2 rounded-lg hover:bg-red-500/10 transition text-slate-400 hover:text-red-400"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }, [certifications, handleEdit, handleDelete]);
 
   if (!isOpen) return null;
 
@@ -518,25 +691,19 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
             {/* Stats */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
               <div className="panel-3d p-4 text-center">
-                <div className="text-2xl font-bold text-gradient-cyber">{certifications.length}</div>
+                <div className="text-2xl font-bold text-gradient-cyber">{stats.total}</div>
                 <div className="text-xs text-slate-400">Total Items</div>
               </div>
               <div className="panel-3d p-4 text-center">
-                <div className="text-2xl font-bold text-secondary-400">
-                  {certifications.filter(c => c.type === 'certification').length}
-                </div>
+                <div className="text-2xl font-bold text-secondary-400">{stats.certsCount}</div>
                 <div className="text-xs text-slate-400">Certifications</div>
               </div>
               <div className="panel-3d p-4 text-center">
-                <div className="text-2xl font-bold text-warm-400">
-                  {certifications.filter(c => c.type === 'badge').length}
-                </div>
+                <div className="text-2xl font-bold text-warm-400">{stats.badgesCount}</div>
                 <div className="text-xs text-slate-400">Badges</div>
               </div>
               <div className="panel-3d p-4 text-center">
-                <div className="text-2xl font-bold text-success-400">
-                  {certifications.reduce((acc, c) => acc + (c.skills?.length || 0), 0)}
-                </div>
+                <div className="text-2xl font-bold text-success-400">{stats.totalSkills}</div>
                 <div className="text-xs text-slate-400">Total Skills</div>
               </div>
             </div>
@@ -551,7 +718,7 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
             </button>
 
             {/* Form */}
-            {editingItem !== null || !editingItem ? (
+            {showForm ? (
               <div className="panel-3d p-6 mb-6 animate-slide-up">
                 <h3 className="text-lg font-semibold text-white mb-4">
                   {editingItem ? 'Edit Certification' : 'Add New Certification'}
@@ -720,6 +887,7 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
                   <button
                     onClick={() => {
                       setEditingItem(null);
+                      setShowForm(false);
                       setFormData({
                         id: '',
                         title: '',
@@ -746,59 +914,7 @@ export default function AdminPanel({ isOpen, onClose, onUpdate, profile, onProfi
             ) : null}
 
             {/* List */}
-            <div className="space-y-3">
-              {certifications.map((item) => (
-                <div
-                  key={item.id}
-                  className="panel-3d p-4 flex items-center justify-between hover:border-primary-500/30 transition"
-                >
-                  <div className="flex items-center gap-4 flex-1 min-w-0">
-                    <div className={`w-12 h-12 rounded-xl bg-gradient-to-r ${item.badgeColor || 'from-primary-500 to-secondary-500'} flex items-center justify-center flex-shrink-0`}>
-                      {item.image ? (
-                        <img src={item.image} alt={item.title} className="w-6 h-6" />
-                      ) : (
-                        <span className="text-white font-bold text-sm">
-                          {item.type === 'certification' ? 'C' : 'B'}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <h4 className="text-white font-semibold truncate">{item.title}</h4>
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full ${
-                          item.type === 'certification'
-                            ? 'bg-primary-500/20 text-primary-400 border border-primary-500/20'
-                            : 'bg-warm-500/20 text-warm-400 border border-warm-500/20'
-                        }`}>
-                          {item.type}
-                        </span>
-                        {item.certificateImage && (
-                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-success-500/20 text-success-400 border border-success-500/20">
-                            <Image className="w-3 h-3 inline mr-1" />
-                            Has Image
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-sm text-slate-400 truncate">{item.issuer} • {item.date}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => handleEdit(item)}
-                      className="p-2 rounded-lg hover:bg-white/5 transition text-slate-400 hover:text-white"
-                    >
-                      <Edit className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(item.id)}
-                      className="p-2 rounded-lg hover:bg-red-500/10 transition text-slate-400 hover:text-red-400"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
+            {memoizedList}
           </>
         )}
       </div>

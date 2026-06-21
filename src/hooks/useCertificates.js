@@ -1,6 +1,25 @@
 import { useState, useEffect } from 'react';
 import { storage, getDefaultData } from '../utils/storage';
 
+const syncWithLocalServer = async (certifications, profile) => {
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    try {
+      const response = await fetch('/api/save-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ certifications, profile })
+      });
+      if (response.ok) {
+        const resData = await response.json();
+        return resData.version;
+      }
+    } catch (e) {
+      console.error('Failed to auto-sync with local dev server:', e);
+    }
+  }
+  return null;
+};
+
 export function useCertificates() {
   const [certifications, setCertifications] = useState([]);
   const [profile, setProfile] = useState(null);
@@ -37,14 +56,30 @@ export function useCertificates() {
     }
   };
 
-  const updateCertifications = (newData) => {
+  const updateCertifications = async (newData) => {
     storage.setCertifications(newData);
     setCertifications(newData);
+
+    const latestProfile = storage.getProfile() || getDefaultData().profile;
+    const newVersion = await syncWithLocalServer(newData, latestProfile);
+    if (newVersion) {
+      storage.setVersion(newVersion);
+      return newVersion;
+    }
+    return null;
   };
 
-  const updateProfile = (newData) => {
+  const updateProfile = async (newData) => {
     storage.setProfile(newData);
     setProfile(newData);
+
+    const latestCerts = storage.getCertifications() || getDefaultData().certifications;
+    const newVersion = await syncWithLocalServer(latestCerts, newData);
+    if (newVersion) {
+      storage.setVersion(newVersion);
+      return newVersion;
+    }
+    return null;
   };
 
   const addCertificate = (cert) => {
