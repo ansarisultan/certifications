@@ -413,7 +413,7 @@ export default function Home() {
                   <div className="relative panel-3d p-2 rounded-full group">
                     <div className="relative overflow-hidden rounded-full bg-[#050816]">
                       <img
-                        src="/profile1.png"
+                        src="/profile.png"
                         alt={profile?.name || 'Profile'}
                         className="w-full aspect-square object-cover hover:scale-105 transition duration-700"
                       />
